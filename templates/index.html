@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <title>Circuit Breaker</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+<nav>
+    <div class="nav-dot" id="nav-dot"></div>
+    <h1>⚡ Circuit Breaker</h1>
+    <span class="nav-estado" id="nav-estado">FECHADO</span>
+</nav>
+
+<div class="container">
+
+    <!-- EXPLICAÇÃO -->
+    <div class="info-box">
+        <strong>Como funciona:</strong> O disjuntor monitora erros em tempo real.
+        <strong>3 erros seguidos</strong> → disjuntor abre e bloqueia requisições.
+        Após <strong>10 segundos</strong> entra em modo de teste (semi-aberto).
+        <strong>2 sucessos</strong> → disjuntor fecha e volta ao normal.
+    </div>
+
+    <!-- ESTADO DO DISJUNTOR -->
+    <div class="disjuntor-container">
+        <div class="disjuntor" id="disjuntor">
+            <div class="disjuntor-icone" id="disjuntor-icone">⚡</div>
+            <div class="disjuntor-estado" id="disjuntor-estado">FECHADO</div>
+            <div class="disjuntor-desc" id="disjuntor-desc">Requisições passando normalmente</div>
+            <div class="disjuntor-timer" id="disjuntor-timer"></div>
+        </div>
+
+        <!-- BARRA DE ERROS -->
+        <div class="erros-container">
+            <div class="erros-label">
+                <span>Erros consecutivos</span>
+                <span id="erros-count">0 / 3</span>
+            </div>
+            <div class="erros-barra-fundo">
+                <div class="erros-barra" id="erros-barra" style="width: 0%"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- CONTROLES -->
+    <div class="controles">
+        <div class="controle-grupo">
+            <label>Taxa de Falha do Serviço</label>
+            <div class="slider-container">
+                <input type="range" id="taxa-falha" min="0" max="100" value="70"
+                    oninput="atualizarSlider()">
+                <span id="taxa-valor">70%</span>
+            </div>
+            <button onclick="configurar()" class="btn-amarelo">⚙️ Aplicar</button>
+        </div>
+
+        <div class="controle-grupo">
+            <label>Disparar Requisições</label>
+            <div class="botoes">
+                <button onclick="fazerRequisicao()" class="btn-verde">📨 1 Requisição</button>
+                <button onclick="sobrecarregar()" class="btn-vermelho">⚡ 10 de uma vez</button>
+                <button onclick="resetar()" class="btn-cinza">🔄 Resetar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- CARDS -->
+    <div class="cards">
+        <div class="card verde">
+            ✅ Sucessos<br>
+            <strong id="total-sucessos">0</strong>
+        </div>
+        <div class="card vermelho">
+            ❌ Erros<br>
+            <strong id="total-erros">0</strong>
+        </div>
+        <div class="card amarelo">
+            🔴 Bloqueadas<br>
+            <strong id="total-bloqueadas">0</strong>
+        </div>
+        <div class="card">
+            📊 Total<br>
+            <strong id="total-requisicoes">0</strong>
+        </div>
+    </div>
+
+    <!-- HISTÓRICO -->
+    <div class="historico-container">
+        <div class="historico-header">
+            <h2>📋 Histórico de Eventos</h2>
+            <button onclick="resetar()" class="btn-cinza pequeno">Limpar</button>
+        </div>
+        <div id="historico"></div>
+    </div>
+
+</div>
+
+<script>
+    setInterval(atualizarStatus, 500);
+
+    function atualizarSlider() {
+        document.getElementById("taxa-valor").textContent =
+            document.getElementById("taxa-falha").value + "%";
+    }
+
+    async function configurar() {
+        const taxa = document.getElementById("taxa-falha").value / 100;
+        await fetch("/configurar", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ taxa_falha: taxa, tempo_resposta: 0.5 })
+        });
+    }
+
+    async function fazerRequisicao() {
+        await fetch("/requisicao", { method: "POST" });
+        atualizarStatus();
+    }
+
+    async function sobrecarregar() {
+        const promises = Array.from({ length: 10 }, () =>
+            fetch("/requisicao", { method: "POST" })
+        );
+        await Promise.all(promises);
+        atualizarStatus();
+    }
+
+    async function resetar() {
+        await fetch("/resetar");
+        atualizarStatus();
+    }
+
+    async function atualizarStatus() {
+        const response = await fetch("/status");
+        const data = await response.json();
+
+        // Atualiza estado do disjuntor
+        const estado    = data.estado;
+        const disjuntor = document.getElementById("disjuntor");
+        const icone     = document.getElementById("disjuntor-icone");
+        const estadoEl  = document.getElementById("disjuntor-estado");
+        const descEl    = document.getElementById("disjuntor-desc");
+        const timerEl   = document.getElementById("disjuntor-timer");
+        const navDot    = document.getElementById("nav-dot");
+        const navEstado = document.getElementById("nav-estado");
+
+        disjuntor.className = "disjuntor " + estado.toLowerCase().replace("_", "-");
+        navDot.className    = "nav-dot " + estado.toLowerCase().replace("_", "-");
+        navEstado.textContent = estado.replace("_", "-");
+        estadoEl.textContent  = estado.replace("_", "-");
+
+        if (estado === "FECHADO") {
+            icone.textContent = "🟢";
+            descEl.textContent = "Requisições passando normalmente";
+            timerEl.textContent = "";
+        } else if (estado === "ABERTO") {
+            icone.textContent = "🔴";
+            descEl.textContent = "Bloqueando todas as requisições";
+            timerEl.textContent = `Recuperando em ${data.tempo_restante}s`;
+        } else {
+            icone.textContent = "🟡";
+            descEl.textContent = "Testando se o serviço voltou...";
+            timerEl.textContent = "";
+        }
+
+        // Barra de erros
+        const pct = (data.erros / data.limite_erros) * 100;
+        document.getElementById("erros-barra").style.width = pct + "%";
+        document.getElementById("erros-count").textContent =
+            `${data.erros} / ${data.limite_erros}`;
+
+        // Cards
+        document.getElementById("total-sucessos").textContent   = data.total_sucessos;
+        document.getElementById("total-erros").textContent      = data.total_erros;
+        document.getElementById("total-bloqueadas").textContent = data.total_bloqueadas;
+        document.getElementById("total-requisicoes").textContent = data.total_requisicoes;
+
+        // Histórico
+        const historico = document.getElementById("historico");
+        historico.innerHTML = data.historico.length === 0
+            ? '<p class="vazio">Nenhum evento ainda.</p>'
+            : data.historico.map(h => `
+                <div class="historico-item ${h.tipo.toLowerCase().replace("_", "-")}">
+                    <span class="h-hora">${h.timestamp}</span>
+                    <span class="h-msg">${h.mensagem}</span>
+                </div>`).join("");
+    }
+</script>
+
+</body>
+</html>
